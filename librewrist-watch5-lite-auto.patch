@@ -220,3 +220,27 @@
      built.set(stagingDir)
      catalogue.from(
          repoRoot.resolve("catalogue/catalogue.json"), repoRoot.resolve("catalogue/catalogue.json.sig"),
+
+--- a/patcher-app/app/src/main/kotlin/io/openshm/patcher/data/AppCatalogue.kt
++++ b/patcher-app/app/src/main/kotlin/io/openshm/patcher/data/AppCatalogue.kt
+@@ -61,7 +61,7 @@
+      * phone or on a watch with SDK [watchSdk] (the input's `minSdk` is not above it).
+      */
+     fun selectedOutputs(watchSdk: Int, skippedApps: Set<String>): List<OutputApp> {
+-        val inScope = apps.filter { it.id !in skippedApps }.flatMap { it.outputIds }.toSet()
++        val inScope = apps.filter { it.id !in skippedApps && it.id !in DEFAULT_SKIPPED_APPS }.flatMap { it.outputIds }.toSet()
+         return outputs.filter { out ->
+             // mode-independent: an output's China input is the same app for the same device
+             out.id in inScope && (out.inputId?.let(::input)?.let { it.device == Device.Phone || it.minSdk <= watchSdk } ?: true)
+--- a/patcher-app/app/src/main/kotlin/io/openshm/patcher/ui/screens/acquire/AcquireViewModel.kt
++++ b/patcher-app/app/src/main/kotlin/io/openshm/patcher/ui/screens/acquire/AcquireViewModel.kt
+@@ -60,7 +60,8 @@
+  */
+ internal fun optionalToggles(catalogue: LoadedCatalogue, watchSdk: Int, skipped: Set<String>): List<OptionalAppToggle> {
+     val available = catalogue.selectedOutputs(watchSdk, emptySet()).map { it.id }.toSet()
+-    return catalogue.apps.filter { app -> app.optional && app.outputIds.any { it in available } }
++    return catalogue.apps.filter { app ->
++        app.id !in io.openshm.patcher.data.DEFAULT_SKIPPED_APPS && app.optional && app.outputIds.any { it in available }
++    }
+         .map { OptionalAppToggle(it, it.id !in skipped) }
+ }
