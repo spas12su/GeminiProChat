@@ -173,14 +173,14 @@
 
 --- a/patcher-app/app/src/main/kotlin/io/openshm/patcher/ui/nav/PatcherNavHost.kt
 +++ b/patcher-app/app/src/main/kotlin/io/openshm/patcher/ui/nav/PatcherNavHost.kt
-@@ -118,6 +118,7 @@
+@@ -118,5 +118,6 @@
  import io.openshm.patcher.ui.screens.signingkey.SigningKeyViewModel
  import io.openshm.patcher.ui.screens.acquire.AcquireEvent
 +import io.openshm.patcher.ui.screens.acquire.AcquireProgress
  import io.openshm.patcher.ui.screens.acquire.AcquireScreen
  import io.openshm.patcher.ui.screens.acquire.AcquireViewModel
  import io.openshm.patcher.ui.screens.acquire.GuidedBrowserHost
-@@ -333,9 +334,21 @@
+@@ -333,10 +334,25 @@
              composable(Route.Acquire.path) {
                  val vm: AcquireViewModel = viewModel()
                  val state by vm.state.collectAsStateWithLifecycle()
