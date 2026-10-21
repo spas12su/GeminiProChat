@@ -1,0 +1,521 @@
+diff -ruN '--exclude=__pycache__' original/LibreWrist-main/USER_CUSTOM_NOTES_zh_TW.md LibreWrist-main/USER_CUSTOM_NOTES_zh_TW.md
+--- a/USER_CUSTOM_NOTES_zh_TW.md	1970-01-01 00:00:00.000000000 +0000
++++ b/USER_CUSTOM_NOTES_zh_TW.md	2026-10-20 03:05:04.544593024 +0000
+@@ -0,0 +1,23 @@
++# LibreWrist 精簡手機版（原始碼分支）
++
++這個分支針對 Galaxy Watch 5 / One UI 8 / 非三星 Android 手機，優先處理血壓與心電圖。
++
++## 已修改
++
++- 無人值守與互動式引導 **新安裝時預設關閉**，仍可自行開啟無人值守。
++- 跳過非血壓／心電圖必要的橋接程式（手機、手錶）、鬧鐘 App、Samsung Health+，避免電話、通知存取、鬧鐘等橋接權限要求。
++- 仍保留手機與手錶 Samsung Health Monitor 及其感測器、藍牙與健康服務所需的權限和 Android 必須的確認畫面。
++- 無人值守手機端連線新增「手動輸入配對埠 + 6 位數配對碼」模式，並可額外填入 Android「無線偵錯」頁面顯示的連線埠；用於 mDNS 服務搜尋失敗時。
++- 不會刪除手錶原廠 SHM，也不會重設手錶。
++
++## 操作手機無線偵錯的備援
++
++進入 **手機**「開發人員選項 → 無線偵錯」，記下主畫面的「IP 位址和連接埠」中之**連接埠**。點選「使用配對碼配對裝置」，取得**配對連接埠**與六位數配對碼。返回本 App「連接此手機」頁面，在「手動配對」輸入這三組資訊。兩個連接埠通常不同，不可混淆。配對視窗必須保持有效，若返回造成視窗消失，請重新開啟取得新碼；部分手機可能需要分割畫面。此備援繞過 mDNS 配對服務發現，但仍要由 Android 啟用無線偵錯並允許配對。
++
++## 尚未完成的部分
++
++**不能保證所有官方 APK 都會自動下載。** 目前官方輸入檔在 catalogue 中只有 APKMirror 發行頁面與 SHA-256，未提供穩定、已授權的直接 APK 連結。APKMirror 通常要求網頁點選並可能產生動態連結，因此不能假裝目前已實現全自動下載。原本的內建瀏覽器下載擷取與雜湊驗證保留。若將來得到正式可直連的 HTTPS 來源，可以加入「驗證檔案版本與 SHA-256 後匯入」的自動取得功能。
++
++**尚未進行實機測試，亦尚未完成 Android APK 編譯。** 此環境缺乏 Android SDK 和 Gradle distribution，無法確認在特定手機韌體上配對成功。請先用 Gradle 及 Android SDK 編譯測試，不要將原始碼 ZIP 當成 APK 安裝。
++
++**版本衝突**：如出現 `INSTALL_FAILED_VERSION_DOWNGRADE`，先辨識衝突究竟是在手機端還是手錶端，並檢查 `com.samsung.android.shealthmonitors` 套件是否仍已安裝／屬於系統預載。不要自動解除安裝系統套件或抹除健康資料。
+diff -ruN '--exclude=__pycache__' original/LibreWrist-main/patcher-app/adb/src/main/kotlin/io/openshm/patcher/adb/SelfAdbPairingNotifier.kt LibreWrist-main/patcher-app/adb/src/main/kotlin/io/openshm/patcher/adb/SelfAdbPairingNotifier.kt
+--- a/patcher-app/adb/src/main/kotlin/io/openshm/patcher/adb/SelfAdbPairingNotifier.kt	2026-10-20 01:26:26.000000000 +0000
++++ b/patcher-app/adb/src/main/kotlin/io/openshm/patcher/adb/SelfAdbPairingNotifier.kt	2026-10-20 03:06:39.916732961 +0000
+@@ -63,12 +63,14 @@
+     private val appContext = context.applicationContext
+     private val manager = appContext.getSystemService(NotificationManager::class.java)
+     private val scope = scope
++    private val ownAddresses = AndroidOwnAddresses(appContext)
+     val session = SelfAdbSession(
+         backend = backend,
+         pairingServices = discovery.discover(AdbServiceType.PAIRING),
+         connectServices = discovery.discover(AdbServiceType.CONNECT),
+         scope = scope,
+-        isLocalHost = AndroidOwnAddresses(appContext)::contains,
++        isLocalHost = ownAddresses::contains,
++        ownHosts = ownAddresses::allHosts,
+         log = { Log.i(LOG_TAG, it) },
+         endpointStore = PrefsSelfAdbEndpointStore(appContext),
+     )
+@@ -209,6 +211,23 @@
+ class AndroidOwnAddresses(context: Context) {
+     private val connectivity = context.getSystemService(ConnectivityManager::class.java)
+ 
++    /** Only addresses assigned to this phone. No remote network discovery or watch addresses. */
++    fun allHosts(): List<String> = try {
++        val fromNetworks = connectivity?.allNetworks.orEmpty().flatMap { network ->
++            connectivity?.getLinkProperties(network)?.linkAddresses.orEmpty().mapNotNull { link ->
++                link.address.takeUnless { it.isAnyLocalAddress || it.isLoopbackAddress || it.isLinkLocalAddress }?.hostAddress
++            }
++        }
++        val fromInterfaces = NetworkInterface.getNetworkInterfaces()?.toList().orEmpty().flatMap { nif ->
++            nif.inetAddresses.toList().mapNotNull { address ->
++                address.takeUnless { it.isAnyLocalAddress || it.isLoopbackAddress || it.isLinkLocalAddress }?.hostAddress
++            }
++        }
++        (fromNetworks + fromInterfaces).distinct().filter { contains(it) }.take(12)
++    } catch (e: Exception) {
++        emptyList()
++    }
++
+     fun contains(host: String): Boolean {
+         if (SelfAdbSession.isOwnAddress(host)) return true
+         val address = try {
+diff -ruN '--exclude=__pycache__' original/LibreWrist-main/patcher-app/adb/src/main/kotlin/io/openshm/patcher/adb/SelfAdbSession.kt LibreWrist-main/patcher-app/adb/src/main/kotlin/io/openshm/patcher/adb/SelfAdbSession.kt
+--- a/patcher-app/adb/src/main/kotlin/io/openshm/patcher/adb/SelfAdbSession.kt	2026-10-20 01:26:26.000000000 +0000
++++ b/patcher-app/adb/src/main/kotlin/io/openshm/patcher/adb/SelfAdbSession.kt	2026-10-20 03:07:07.621467246 +0000
+@@ -59,6 +59,8 @@
+     private val connectServiceTimeoutMillis: Long = 15_000,
+     private val reconnectTimeoutMillis: Long = 5_000,
+     private val isLocalHost: (String) -> Boolean = ::isOwnAddress,
++    /** Android-reported addresses of this phone, only for a loopback refusal fallback. */
++    private val ownHosts: () -> List<String> = { emptyList() },
+     /** Diagnostic lines (state names, counts, exception class names); never codes or keys. */
+     private val log: (String) -> Unit = {},
+     /** Last working endpoint, tried before mDNS discovery and updated on every successful connect. */
+@@ -91,6 +93,9 @@
+     @Volatile
+     private var pairingHost: String = localHost
+ 
++    /** Optional port from the phone's own Wireless debugging screen; never from the watch. */
++    @Volatile private var manualConnectPort: Int? = null
++
+     /**
+      * Tries to connect with the already-paired key first ([SelfAdbState.Reconnecting]); when that
+      * finds no connect service or is rejected, starts looking for the pairing service. Safe to call
+@@ -102,6 +107,7 @@
+         submitJob?.cancel()
+         val gen = ++generation
+         pairingPort = null
++        manualConnectPort = null
+         triedPorts.clear()
+         set(SelfAdbState.Reconnecting)
+         discoveryJob = scope.launch {
+@@ -263,6 +269,29 @@
+         }
+     }
+ 
++    /**
++     * Bypass mDNS pairing discovery when Android fails to advertise its own service.
++     * The user supplies the pairing port shown by *this phone*, not the watch.
++     * [connectPort] is the separate "IP address & port" field on Wireless debugging.
++     * The app still authenticates through the normal ADB TLS pairing handshake.
++     */
++    @Synchronized
++    fun submitManualPairing(port: Int, code: String, connectPort: Int? = null): Job? {
++        if (port !in 1..65535 || !Regex("[0-9]{6}").matches(code.trim())) return null
++        if (connectPort != null && connectPort !in 1..65535) return null
++        if (mutableState.value !is SelfAdbState.WaitingForPairingService &&
++            mutableState.value !is SelfAdbState.AmbiguousService &&
++            mutableState.value !is SelfAdbState.WaitingForCode
++        ) return null
++        pairingPort = port
++        pairingHost = localHost
++        manualConnectPort = connectPort
++        submitJob?.cancel()
++        val gen = ++generation
++        set(SelfAdbState.Pairing)
++        return scope.launch { pairAndConnect(gen, localHost, port, code.trim()) }.also { submitJob = it }
++    }
++
+     /** Pairs with [code] and connects. Ignored unless a code is currently being waited for. */
+     @Synchronized
+     fun submitCode(code: String): Job? {
+@@ -295,13 +324,22 @@
+ 
+     private suspend fun pairAndConnect(gen: Int, announcedHost: String, port: Int, code: String) {
+         try {
+-            try {
+-                AdbPairing(backend).pair(localHost, port, code)
+-            } catch (e: AdbException.Pairing) {
+-                if (e.reason != PairingFailure.NETWORK || announcedHost == localHost) throw e
+-                log("pairing: $localHost unreachable, trying the announced address")
+-                AdbPairing(backend).pair(announcedHost, port, code)
++            // Some Android adbd builds listen only on the phone's Wi-Fi interface. All
++            // fallback addresses must be assigned to this very phone, never the watch.
++            val hosts = (listOf(localHost, announcedHost) + ownHosts()).distinct().filter { it == localHost || isLocalHost(it) }
++            var lastNetworkError: AdbException.Pairing? = null
++            for (host in hosts) {
++                try {
++                    AdbPairing(backend).pair(host, port, code)
++                    lastNetworkError = null
++                    break
++                } catch (e: AdbException.Pairing) {
++                    if (e.reason != PairingFailure.NETWORK) throw e
++                    lastNetworkError = e
++                    log("pairing host unreachable; trying another own address")
++                }
+             }
++            if (lastNetworkError != null) throw lastNetworkError
+         } catch (e: AdbException.Pairing) {
+             log("pairing failed: ${e.reason}")
+             transition(
+@@ -340,6 +378,22 @@
+      * other error is final. Returns null when [gen] went stale.
+      */
+     private suspend fun connectToLocalService(gen: Int): AdbClient? {
++        // The explicit connection port does not need mDNS; it is the separate port shown on
++        // the phone's Wireless debugging main page, not the six-digit-code pairing port.
++        manualConnectPort?.let { port ->
++            val hosts = (listOf(localHost) + ownHosts()).distinct().filter { it == localHost || isLocalHost(it) }
++            for (host in hosts) {
++                try {
++                    val manual = AdbClient.connect(backend, host, port, storedEndpointTimeoutMillis)
++                    remember(host, port)
++                    return manual
++                } catch (e: CancellationException) {
++                    throw e
++                } catch (e: Exception) {
++                    log("manual connection host failed (${e.javaClass.simpleName}); trying next own address")
++                }
++            }
++        }
+         val tried = HashSet<Int>() // not triedPorts: a pairing-wait attempt may have failed before pairing
+         var refused: AdbException? = null
+         var client: AdbClient? = null
+diff -ruN '--exclude=__pycache__' original/LibreWrist-main/patcher-app/adb/src/test/kotlin/io/openshm/patcher/adb/DiscoveryAndSelfAdbTest.kt LibreWrist-main/patcher-app/adb/src/test/kotlin/io/openshm/patcher/adb/DiscoveryAndSelfAdbTest.kt
+--- a/patcher-app/adb/src/test/kotlin/io/openshm/patcher/adb/DiscoveryAndSelfAdbTest.kt	2026-10-20 01:26:26.000000000 +0000
++++ b/patcher-app/adb/src/test/kotlin/io/openshm/patcher/adb/DiscoveryAndSelfAdbTest.kt	2026-10-20 03:05:04.543793574 +0000
+@@ -91,6 +91,30 @@
+         withTimeout(3_000) { state.first(predicate) }
+ 
+     @Test
++    fun `manual pairing works without mDNS when both ports are supplied`() = runBlocking {
++        val env = Env()
++        env.session.start()
++        env.session.await { it == SelfAdbState.WaitingForPairingService }
++        env.session.submitManualPairing(41234, "123456", 42567)
++        env.session.await { it is SelfAdbState.Connected }
++        assertEquals(listOf(Triple("127.0.0.1", 41234, "123456")), env.pairCalls)
++        assertEquals(listOf("127.0.0.1" to 42567), env.connectCalls)
++        env.scope.cancel()
++    }
++
++    @Test
++    fun `manual pairing refuses invalid ports and pairing codes`() = runBlocking {
++        val env = Env()
++        env.session.start()
++        env.session.await { it == SelfAdbState.WaitingForPairingService }
++        assertNull(env.session.submitManualPairing(0, "123456"))
++        assertNull(env.session.submitManualPairing(41234, "12345"))
++        assertNull(env.session.submitManualPairing(41234, "123456", 65536))
++        assertTrue(env.pairCalls.isEmpty())
++        env.scope.cancel()
++    }
++
++    @Test
+     fun `self-ADB pairs on loopback with the discovered port and connects`() = runBlocking {
+         val env = Env()
+         env.session.start()
+diff -ruN '--exclude=__pycache__' original/LibreWrist-main/patcher-app/app/build.gradle.kts LibreWrist-main/patcher-app/app/build.gradle.kts
+--- a/patcher-app/app/build.gradle.kts	2026-10-20 01:26:26.000000000 +0000
++++ b/patcher-app/app/build.gradle.kts	2026-10-20 03:02:41.670943161 +0000
+@@ -23,7 +23,7 @@
+         val catalogueMinApp = Regex("\"minAppVersion\":\\s*(\\d+)")
+             .find(rootProject.file("../catalogue/catalogue.json").readText())?.groupValues?.get(1)?.toInt() ?: 1
+         versionCode = System.getenv("PATCHER_VERSION_CODE")?.toIntOrNull() ?: catalogueMinApp
+-        versionName = "0.9.4"
++        versionName = "0.9.5-local"
+         // Base URL of the raw `catalogue/` directory of the public repository (config.env CATALOGUE_URL,
+         // or -PcatalogueUrl). Empty disables catalogue updates. Only https is accepted.
+         val catalogueUrl = (providers.gradleProperty("catalogueUrl").orNull ?: System.getenv("CATALOGUE_URL") ?: "").trim()
+diff -ruN '--exclude=__pycache__' original/LibreWrist-main/patcher-app/app/src/debug/kotlin/io/openshm/patcher/preview/ScreenSamples.kt LibreWrist-main/patcher-app/app/src/debug/kotlin/io/openshm/patcher/preview/ScreenSamples.kt
+--- a/patcher-app/app/src/debug/kotlin/io/openshm/patcher/preview/ScreenSamples.kt	2026-10-20 01:26:26.000000000 +0000
++++ b/patcher-app/app/src/debug/kotlin/io/openshm/patcher/preview/ScreenSamples.kt	2026-10-20 03:05:04.543076243 +0000
+@@ -221,5 +221,5 @@
+ @Composable
+ internal fun PhoneAdbSample(state: PhoneAdbUiState, subStep: Int = 2) =
+     CompositionLocalProvider(LocalFrozenGuideSubStep provides subStep) {
+-        PhoneAdbScreen(state, onConnect = {}, onSubmitCode = {}, onCancel = {}, onOpenWirelessDebugging = {}, onBack = {})
++        PhoneAdbScreen(state, onConnect = {}, onSubmitCode = {}, onManualPairing = { _, _, _ -> }, onCancel = {}, onOpenWirelessDebugging = {}, onBack = {})
+     }
+diff -ruN '--exclude=__pycache__' original/LibreWrist-main/patcher-app/app/src/main/kotlin/io/openshm/patcher/data/AppCatalogue.kt LibreWrist-main/patcher-app/app/src/main/kotlin/io/openshm/patcher/data/AppCatalogue.kt
+--- a/patcher-app/app/src/main/kotlin/io/openshm/patcher/data/AppCatalogue.kt	2026-10-20 01:26:26.000000000 +0000
++++ b/patcher-app/app/src/main/kotlin/io/openshm/patcher/data/AppCatalogue.kt	2026-10-20 03:05:04.542649518 +0000
+@@ -61,7 +61,7 @@
+      * phone or on a watch with SDK [watchSdk] (the input's `minSdk` is not above it).
+      */
+     fun selectedOutputs(watchSdk: Int, skippedApps: Set<String>): List<OutputApp> {
+-        val inScope = apps.filter { !it.optional || it.id !in skippedApps }.flatMap { it.outputIds }.toSet()
++        val inScope = apps.filter { it.id !in skippedApps }.flatMap { it.outputIds }.toSet()
+         return outputs.filter { out ->
+             // mode-independent: an output's China input is the same app for the same device
+             out.id in inScope && (out.inputId?.let(::input)?.let { it.device == Device.Phone || it.minSdk <= watchSdk } ?: true)
+diff -ruN '--exclude=__pycache__' original/LibreWrist-main/patcher-app/app/src/main/kotlin/io/openshm/patcher/data/AutomationPrefs.kt LibreWrist-main/patcher-app/app/src/main/kotlin/io/openshm/patcher/data/AutomationPrefs.kt
+--- a/patcher-app/app/src/main/kotlin/io/openshm/patcher/data/AutomationPrefs.kt	2026-10-20 01:26:26.000000000 +0000
++++ b/patcher-app/app/src/main/kotlin/io/openshm/patcher/data/AutomationPrefs.kt	2026-10-20 03:02:41.662921910 +0000
+@@ -18,9 +18,9 @@
+  */
+ data class AutomationState(
+     /** Tic, the guide pet, walks the user through the Android Settings screens the app sends them to. */
+-    val guidePet: Boolean = true,
++    val guidePet: Boolean = false,
+     /** Do everything that can be automated over ADB and advance between steps on a countdown. */
+-    val unattended: Boolean = true,
++    val unattended: Boolean = false,
+     /** Do not stop at operation confirmations (skipped steps, profile correction, notices). */
+     val freeRun: Boolean = false,
+     /** Uninstall (with its data) an app signed with another key, without asking. */
+diff -ruN '--exclude=__pycache__' original/LibreWrist-main/patcher-app/app/src/main/kotlin/io/openshm/patcher/data/SetupSession.kt LibreWrist-main/patcher-app/app/src/main/kotlin/io/openshm/patcher/data/SetupSession.kt
+--- a/patcher-app/app/src/main/kotlin/io/openshm/patcher/data/SetupSession.kt	2026-10-20 01:26:26.000000000 +0000
++++ b/patcher-app/app/src/main/kotlin/io/openshm/patcher/data/SetupSession.kt	2026-10-20 03:05:04.542338931 +0000
+@@ -17,6 +17,9 @@
+     WearOs3Or4(33),
+ }
+ 
++/** Optional extras not required for the SHM blood pressure / ECG workflow. */
++internal val DEFAULT_SKIPPED_APPS = setOf("samsung-health", "alarm", "bridge")
++
+ data class SessionState(
+     val watchProfile: WatchProfile = WatchProfile.WearOs5,
+     val packagePrefix: String = PackagePrefix.generate(),
+@@ -27,7 +30,7 @@
+      *  sees it (see [seedOffByDefault]); after that the user's choice stands. */
+     val disabledPatches: Set<String> = emptySet(),
+     /** Ids of the optional catalogue apps the user switched off on the Acquire screen; empty means all are included. */
+-    val skippedApps: Set<String> = emptySet(),
++    val skippedApps: Set<String> = DEFAULT_SKIPPED_APPS,
+     /** Ids of the outputs the user restored (removed) from Home; they stay out of Home and the self-test until installed again. */
+     val restoredOutputs: Set<String> = emptySet(),
+ ) {
+@@ -102,7 +105,7 @@
+             packagePrefix = stored ?: PackagePrefix.generate(),
+             prefixLocked = locked && stored != null,
+             disabledPatches = disabled,
+-            skippedApps = p.getStringSet(KEY_SKIPPED_APPS, null)?.toSet().orEmpty(),
++            skippedApps = p.getStringSet(KEY_SKIPPED_APPS, null)?.toSet().orEmpty() + DEFAULT_SKIPPED_APPS,
+             restoredOutputs = p.getStringSet(KEY_RESTORED, null)?.toSet().orEmpty(),
+         )
+         prefs = p
+diff -ruN '--exclude=__pycache__' original/LibreWrist-main/patcher-app/app/src/main/kotlin/io/openshm/patcher/device/SelfAdbController.kt LibreWrist-main/patcher-app/app/src/main/kotlin/io/openshm/patcher/device/SelfAdbController.kt
+--- a/patcher-app/app/src/main/kotlin/io/openshm/patcher/device/SelfAdbController.kt	2026-10-20 01:26:26.000000000 +0000
++++ b/patcher-app/app/src/main/kotlin/io/openshm/patcher/device/SelfAdbController.kt	2026-10-20 03:02:41.665478871 +0000
+@@ -41,6 +41,8 @@
+     @Volatile
+     private var codeSink: ((String) -> Unit)? = null
+ 
++    @Volatile private var manualPairingSink: ((Int, String, Int?) -> Unit)? = null
++
+     /**
+      * A code that arrived before the session was ready for it: the guide reads it from the pairing
+      * dialog the moment it opens, while the session still needs a moment to discover the pairing service.
+@@ -122,4 +124,15 @@
+     internal fun setCodeSink(sink: ((String) -> Unit)?) {
+         codeSink = sink
+     }
++
++    /** User-requested fallback for a phone whose local pairing service never appears in mDNS. */
++    fun submitManualPairing(port: Int, code: String, connectPort: Int?) {
++        if (state.value.active && port in 1..65535 && (connectPort == null || connectPort in 1..65535) &&
++            Regex("[0-9]{6}").matches(code)
++        ) manualPairingSink?.invoke(port, code, connectPort)
++    }
++
++    internal fun setManualPairingSink(sink: ((Int, String, Int?) -> Unit)?) {
++        manualPairingSink = sink
++    }
+ }
+diff -ruN '--exclude=__pycache__' original/LibreWrist-main/patcher-app/app/src/main/kotlin/io/openshm/patcher/device/SelfAdbService.kt LibreWrist-main/patcher-app/app/src/main/kotlin/io/openshm/patcher/device/SelfAdbService.kt
+--- a/patcher-app/app/src/main/kotlin/io/openshm/patcher/device/SelfAdbService.kt	2026-10-20 01:26:26.000000000 +0000
++++ b/patcher-app/app/src/main/kotlin/io/openshm/patcher/device/SelfAdbService.kt	2026-10-20 03:02:41.665914721 +0000
+@@ -66,6 +66,9 @@
+         }
+         notifier = fresh
+         SelfAdbController.setCodeSink { fresh.session.submitCode(it) }
++        SelfAdbController.setManualPairingSink { port, code, connectPort ->
++            fresh.session.submitManualPairing(port, code, connectPort)
++        }
+         job = scope.launch {
+             val follow = launch {
+                 val returnAfterPairing = ReturnAfterPairing()
+@@ -125,6 +128,7 @@
+ 
+     private fun releaseNotifier() {
+         SelfAdbController.setCodeSink(null)
++        SelfAdbController.setManualPairingSink(null)
+         notifier?.stop() // also closes the connection
+         notifier = null
+     }
+diff -ruN '--exclude=__pycache__' original/LibreWrist-main/patcher-app/app/src/main/kotlin/io/openshm/patcher/ui/nav/PatcherNavHost.kt LibreWrist-main/patcher-app/app/src/main/kotlin/io/openshm/patcher/ui/nav/PatcherNavHost.kt
+--- a/patcher-app/app/src/main/kotlin/io/openshm/patcher/ui/nav/PatcherNavHost.kt	2026-10-20 01:26:26.000000000 +0000
++++ b/patcher-app/app/src/main/kotlin/io/openshm/patcher/ui/nav/PatcherNavHost.kt	2026-10-20 03:02:41.667294092 +0000
+@@ -248,6 +248,7 @@
+                     state,
+                     onConnect = { whenNotificationsAllowed { vm.begin() } },
+                     onSubmitCode = vm::submitCode,
++                    onManualPairing = vm::submitManualPairing,
+                     onCancel = vm::cancel,
+                     onOpenWirelessDebugging = vm::openWirelessDebugging,
+                     onBack = back,
+diff -ruN '--exclude=__pycache__' original/LibreWrist-main/patcher-app/app/src/main/kotlin/io/openshm/patcher/ui/screens/phoneadb/PhoneAdbScreen.kt LibreWrist-main/patcher-app/app/src/main/kotlin/io/openshm/patcher/ui/screens/phoneadb/PhoneAdbScreen.kt
+--- a/patcher-app/app/src/main/kotlin/io/openshm/patcher/ui/screens/phoneadb/PhoneAdbScreen.kt	2026-10-20 01:26:26.000000000 +0000
++++ b/patcher-app/app/src/main/kotlin/io/openshm/patcher/ui/screens/phoneadb/PhoneAdbScreen.kt	2026-10-20 03:02:41.667479780 +0000
+@@ -6,6 +6,15 @@
+ import androidx.compose.material.icons.Icons
+ import androidx.compose.material.icons.rounded.Wifi
+ import androidx.compose.material3.MaterialTheme
++import androidx.compose.material3.OutlinedTextField
++import androidx.compose.material3.Text
++import androidx.compose.material3.Button
++import androidx.compose.foundation.text.KeyboardOptions
++import androidx.compose.ui.text.input.KeyboardType
++import androidx.compose.runtime.getValue
++import androidx.compose.runtime.setValue
++import androidx.compose.runtime.mutableStateOf
++import androidx.compose.runtime.saveable.rememberSaveable
+ import androidx.compose.runtime.Composable
+ import androidx.compose.ui.Modifier
+ import androidx.compose.ui.res.stringResource
+@@ -31,12 +40,16 @@
+     state: PhoneAdbUiState,
+     onConnect: () -> Unit,
+     onSubmitCode: (String) -> Unit,
++    onManualPairing: (Int, String, Int?) -> Unit,
+     onCancel: () -> Unit,
+     onOpenWirelessDebugging: () -> Unit,
+     onBack: () -> Unit,
+     modifier: Modifier = Modifier,
+ ) {
+     val phase = state.phase
++    var manualPort by rememberSaveable { mutableStateOf("") }
++    var manualCode by rememberSaveable { mutableStateOf("") }
++    var connectPort by rememberSaveable { mutableStateOf("") }
+     // While the code is asked for, the field comes first and the guide stays below it.
+     val askingForCode = phase == SelfAdbPhase.WaitingForCode || phase == SelfAdbPhase.WrongCode
+     val guided = askingForCode || phase == SelfAdbPhase.Reconnecting || phase == SelfAdbPhase.WaitingForService
+@@ -72,6 +85,40 @@
+                     retryLabel = R.string.action_retry,
+                 )
+                 if (phase == SelfAdbPhase.Failed) state.error?.let { PackageId(it, maxLines = 3) }
++                if (phase == SelfAdbPhase.WaitingForService || phase == SelfAdbPhase.Ambiguous ||
++                    phase == SelfAdbPhase.WaitingForCode || phase == SelfAdbPhase.WrongCode
++                ) {
++                    Text(stringResource(R.string.phoneadb_manual_title), style = MaterialTheme.typography.titleSmall)
++                    InstructionText(stringResource(R.string.phoneadb_manual_help))
++                    OutlinedTextField(
++                        value = manualPort, onValueChange = { manualPort = it.filter(Char::isDigit).take(5) },
++                        label = { Text(stringResource(R.string.phoneadb_pairing_port)) },
++                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
++                        modifier = Modifier.fillMaxWidth(), singleLine = true,
++                    )
++                    OutlinedTextField(
++                        value = manualCode, onValueChange = { manualCode = it.filter(Char::isDigit).take(6) },
++                        label = { Text(stringResource(R.string.phoneadb_pairing_code)) },
++                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
++                        modifier = Modifier.fillMaxWidth(), singleLine = true,
++                    )
++                    OutlinedTextField(
++                        value = connectPort, onValueChange = { connectPort = it.filter(Char::isDigit).take(5) },
++                        label = { Text(stringResource(R.string.phoneadb_connect_port)) },
++                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
++                        modifier = Modifier.fillMaxWidth(), singleLine = true,
++                    )
++                    Button(
++                        onClick = {
++                            manualPort.toIntOrNull()?.let { port ->
++                                onManualPairing(port, manualCode, connectPort.toIntOrNull())
++                            }
++                        },
++                        enabled = manualPort.toIntOrNull() in 1..65535 && manualCode.length == 6 &&
++                            (connectPort.isBlank() || connectPort.toIntOrNull() in 1..65535),
++                    ) { Text(stringResource(R.string.phoneadb_manual_pair)) }
++                }
++
+                 if (guided) {
+                     if (askingForCode) SelfAdbGuide()
+                     QuietAction(stringResource(R.string.selfadb_open_wireless), onOpenWirelessDebugging)
+diff -ruN '--exclude=__pycache__' original/LibreWrist-main/patcher-app/app/src/main/kotlin/io/openshm/patcher/ui/screens/phoneadb/PhoneAdbViewModel.kt LibreWrist-main/patcher-app/app/src/main/kotlin/io/openshm/patcher/ui/screens/phoneadb/PhoneAdbViewModel.kt
+--- a/patcher-app/app/src/main/kotlin/io/openshm/patcher/ui/screens/phoneadb/PhoneAdbViewModel.kt	2026-10-20 01:26:26.000000000 +0000
++++ b/patcher-app/app/src/main/kotlin/io/openshm/patcher/ui/screens/phoneadb/PhoneAdbViewModel.kt	2026-10-20 03:02:41.666113717 +0000
+@@ -114,6 +114,9 @@
+ 
+     fun submitCode(code: String) = SelfAdbController.submitCode(code)
+ 
++    fun submitManualPairing(port: Int, code: String, connectPort: Int?) =
++        SelfAdbController.submitManualPairing(port, code, connectPort)
++
+     /** Also clears a failed attempt (which is no longer active), back to the start of the step. */
+     fun cancel() {
+         if (SelfAdbController.state.value.purpose == SelfAdbPurpose.Setup) SelfAdbController.finish()
+diff -ruN '--exclude=__pycache__' original/LibreWrist-main/patcher-app/app/src/main/res/values/strings.xml LibreWrist-main/patcher-app/app/src/main/res/values/strings.xml
+--- a/patcher-app/app/src/main/res/values/strings.xml	2026-10-20 01:26:26.000000000 +0000
++++ b/patcher-app/app/src/main/res/values/strings.xml	2026-10-20 03:02:41.668786064 +0000
+@@ -771,4 +771,10 @@
+     <string name="unattended_attention_ok">Got it</string>
+     <string name="unattended_paused_badge">Unattended mode paused, waiting for you</string>
+     <string name="unattended_paused_reopen">Show why</string>
++    <string name="phoneadb_manual_title">Manual pairing (if automatic connection fails)</string>
++    <string name="phoneadb_manual_help">On this phone, open Wireless debugging → Pair device with pairing code. Enter the pairing port and six-digit code shown there. The separate main-page connection port is optional and can help when discovery fails. Keep the pairing dialog open while submitting.</string>
++    <string name="phoneadb_pairing_port">Pairing port</string>
++    <string name="phoneadb_pairing_code">Six-digit pairing code</string>
++    <string name="phoneadb_connect_port">Connection port (optional, not pairing port)</string>
++    <string name="phoneadb_manual_pair">Connect using these details</string>
+ </resources>
+diff -ruN '--exclude=__pycache__' original/LibreWrist-main/patcher-app/app/src/main/res/values-zh-rTW/strings.xml LibreWrist-main/patcher-app/app/src/main/res/values-zh-rTW/strings.xml
+--- a/patcher-app/app/src/main/res/values-zh-rTW/strings.xml	2026-10-20 01:26:26.000000000 +0000
++++ b/patcher-app/app/src/main/res/values-zh-rTW/strings.xml	2026-10-20 03:02:41.670575848 +0000
+@@ -760,4 +760,10 @@
+     <string name="unattended_attention_ok">知道了</string>
+     <string name="unattended_paused_badge">無人值守模式已暫停，正在等你</string>
+     <string name="unattended_paused_reopen">查看原因</string>
++    <string name="phoneadb_manual_title">手動配對（自動連線失敗時）</string>
++    <string name="phoneadb_manual_help">在這支手機的「無線偵錯」中，開啟「使用配對碼配對裝置」，輸入畫面顯示的配對連接埠與六位數代碼。主畫面上的「IP 位址和連接埠」是另一個連接埠，可選填以避開服務搜尋問題。送出時請保持配對視窗開啟。</string>
++    <string name="phoneadb_pairing_port">配對連接埠</string>
++    <string name="phoneadb_pairing_code">六位數配對碼</string>
++    <string name="phoneadb_connect_port">ADB 連線埠（選填，與配對埠不同）</string>
++    <string name="phoneadb_manual_pair">使用上述資料連線</string>
+ </resources>
+diff -ruN '--exclude=__pycache__' original/LibreWrist-main/patcher-app/app/src/test/kotlin/io/openshm/patcher/AutomationStateTest.kt LibreWrist-main/patcher-app/app/src/test/kotlin/io/openshm/patcher/AutomationStateTest.kt
+--- a/patcher-app/app/src/test/kotlin/io/openshm/patcher/AutomationStateTest.kt	2026-10-20 01:26:26.000000000 +0000
++++ b/patcher-app/app/src/test/kotlin/io/openshm/patcher/AutomationStateTest.kt	2026-10-20 03:05:04.543350157 +0000
+@@ -13,9 +13,9 @@
+ 
+ class AutomationStateTest {
+     @Test
+-    fun defaultsAreUnattendedOnAndTheRestOff() {
++    fun defaultsAreManualAndTheRestOff() {
+         val s = AutomationState()
+-        assertTrue(s.unattended)
++        assertFalse(s.unattended)
+         assertFalse(s.freeRun)
+         assertFalse(s.uninstallMismatch)
+         assertFalse(s.freeRunWarningHidden)
+@@ -25,17 +25,17 @@
+     }
+ 
+     @Test
+-    fun guidePetIsOnByDefaultAndIndependentOfUnattended() {
+-        assertTrue(AutomationState().guidePet)
++    fun guidePetIsOffByDefaultAndIndependentOfUnattended() {
++        assertFalse(AutomationState().guidePet)
+         try {
+             Automation.setUnattended(false)
+-            assertTrue(Automation.state.value.guidePet)
++            assertFalse(Automation.state.value.guidePet)
+             Automation.setGuidePet(false)
+             assertFalse(Automation.state.value.guidePet)
+             assertFalse(Automation.state.value.unattended)
+         } finally {
+-            Automation.setGuidePet(true)
+-            Automation.setUnattended(true)
++            Automation.setGuidePet(false)
++            Automation.setUnattended(false)
+         }
+     }
+ 
+@@ -69,7 +69,7 @@
+ 
+     @Test
+     fun appsNoticeShowsOnAFirstLaunchUntilAcknowledged() {
+-        assertTrue(AutomationState().appsNoticePending)
++        assertFalse(AutomationState().appsNoticePending)
+         assertFalse(AutomationState(appsNoticeSeen = true).appsNoticePending)
+     }
+ 
