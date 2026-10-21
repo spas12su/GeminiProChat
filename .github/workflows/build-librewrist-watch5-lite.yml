@@ -39,7 +39,7 @@ jobs:
           p = Path("patcher-app/app/build.gradle.kts")
           s = p.read_text()
           s = s.replace('applicationId = "io.openshm.patcher"', 'applicationId = "io.openshm.patcher.watch5lite"')
-          s = s.replace('versionName = "0.9.5-local"', 'versionName = "0.9.5-watch5lite-r2"')
+          s = s.replace('versionName = "0.9.5-local"', 'versionName = "0.9.5-watch5lite-r3"')
           p.write_text(s)
           p = Path("patcher-app/app/src/main/res/values/strings.xml")
           s = p.read_text()
@@ -90,7 +90,7 @@ jobs:
           test -s "$src"
           "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "$src"
           mkdir -p output
-          cp "$src" output/LibreWrist_Watch5_Lite_Release.apk
+          cp "$src" output/LibreWrist_Watch5_Lite_R3.apk
           sha256sum output/LibreWrist_Watch5_Lite_Release.apk | tee output/SHA256SUMS.txt
           bytes="$(stat -c%s output/LibreWrist_Watch5_Lite_Release.apk)"
           echo "APK bytes: $bytes"
