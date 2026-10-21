@@ -39,7 +39,7 @@ jobs:
           p = Path("patcher-app/app/build.gradle.kts")
           s = p.read_text()
           s = s.replace('applicationId = "io.openshm.patcher"', 'applicationId = "io.openshm.patcher.watch5lite"')
-          s = s.replace('versionName = "0.9.5-local"', 'versionName = "0.9.5-watch5lite"')
+          s = s.replace('versionName = "0.9.5-local"', 'versionName = "0.9.5-watch5lite-r2"')
           p.write_text(s)
           p = Path("patcher-app/app/src/main/res/values/strings.xml")
           s = p.read_text()
@@ -82,7 +82,6 @@ jobs:
         working-directory: librewrist/patcher-app
         run: |
           export OPENSHM_KEYS_DIR="$RUNNER_TEMP/openshm-keys"
-          export PATCHER_VERSION_CODE="$((100000 + GITHUB_RUN_NUMBER))"
           gradle --no-daemon --stacktrace :app:assembleRelease
 
       - name: Verify and prepare APK
@@ -95,7 +94,7 @@ jobs:
           sha256sum output/LibreWrist_Watch5_Lite_Release.apk | tee output/SHA256SUMS.txt
           bytes="$(stat -c%s output/LibreWrist_Watch5_Lite_Release.apk)"
           echo "APK bytes: $bytes"
-          test "$bytes" -lt 90000000
+          test "$bytes" -lt 81672941
           ls -lh output/LibreWrist_Watch5_Lite_Release.apk
 
       - name: Upload APK
