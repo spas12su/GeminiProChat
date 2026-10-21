@@ -16,6 +16,7 @@ jobs:
     env:
       BUILD_TOOLS_VERSION: "36.0.0"
       PLATFORM_API: "36"
+      CATALOGUE_URL: "https://raw.githubusercontent.com/LibreStatic/LibreWrist/main/catalogue"
     steps:
       - name: Checkout build branch
         uses: actions/checkout@v4
@@ -31,6 +32,8 @@ jobs:
           cd librewrist
           git apply --check ../librewrist-watch5-lite.patch
           git apply ../librewrist-watch5-lite.patch
+          git apply --check ../librewrist-watch5-lite-auto.patch
+          git apply ../librewrist-watch5-lite-auto.patch
           python3 - <<'PY'
           from pathlib import Path
           p = Path("patcher-app/app/build.gradle.kts")
@@ -65,25 +68,39 @@ jobs:
         with:
           gradle-version: "9.5.0"
 
-      - name: Build debug APK
-        working-directory: librewrist/patcher-app
-        run: gradle --no-daemon --stacktrace :app:assembleDebug
-
-      - name: Prepare APK artifact
+      - name: Create one-run signing key
         run: |
-          src="librewrist/patcher-app/app/build/outputs/apk/debug/app-debug.apk"
+          mkdir -p "$RUNNER_TEMP/openshm-keys"
+          PASS="$(openssl rand -hex 24)"
+          printf '%s' "$PASS" > "$RUNNER_TEMP/openshm-keys/patcher.pass"
+          keytool -genkeypair -noprompt             -storetype PKCS12             -keystore "$RUNNER_TEMP/openshm-keys/patcher.p12"             -storepass "$PASS" -keypass "$PASS"             -alias patcher -keyalg RSA -keysize 3072 -validity 3650             -dname "CN=LibreWrist Watch5 Lite, O=Personal Build"
+
+      - name: Build release APK
+        working-directory: librewrist/patcher-app
+        run: |
+          export OPENSHM_KEYS_DIR="$RUNNER_TEMP/openshm-keys"
+          export PATCHER_VERSION_CODE="$((100000 + GITHUB_RUN_NUMBER))"
+          gradle --no-daemon --stacktrace :app:assembleRelease
+
+      - name: Verify and prepare APK
+        run: |
+          src="librewrist/patcher-app/app/build/outputs/apk/release/app-release.apk"
           test -s "$src"
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "$src"
           mkdir -p output
-          cp "$src" output/LibreWrist_Watch5_Lite.apk
-          sha256sum output/LibreWrist_Watch5_Lite.apk | tee output/SHA256SUMS.txt
-          ls -lh output/LibreWrist_Watch5_Lite.apk
+          cp "$src" output/LibreWrist_Watch5_Lite_Release.apk
+          sha256sum output/LibreWrist_Watch5_Lite_Release.apk | tee output/SHA256SUMS.txt
+          bytes="$(stat -c%s output/LibreWrist_Watch5_Lite_Release.apk)"
+          echo "APK bytes: $bytes"
+          test "$bytes" -lt 90000000
+          ls -lh output/LibreWrist_Watch5_Lite_Release.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: LibreWrist-Watch5-Lite-APK
+          name: LibreWrist-Watch5-Lite-Release
           path: |
-            output/LibreWrist_Watch5_Lite.apk
+            output/LibreWrist_Watch5_Lite_Release.apk
             output/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 7
