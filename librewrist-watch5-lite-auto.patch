@@ -234,7 +234,7 @@
              out.id in inScope && (out.inputId?.let(::input)?.let { it.device == Device.Phone || it.minSdk <= watchSdk } ?: true)
 --- a/patcher-app/app/src/main/kotlin/io/openshm/patcher/ui/screens/acquire/AcquireViewModel.kt
 +++ b/patcher-app/app/src/main/kotlin/io/openshm/patcher/ui/screens/acquire/AcquireViewModel.kt
-@@ -60,7 +60,8 @@
+@@ -60,5 +60,7 @@
   */
  internal fun optionalToggles(catalogue: LoadedCatalogue, watchSdk: Int, skipped: Set<String>): List<OptionalAppToggle> {
      val available = catalogue.selectedOutputs(watchSdk, emptySet()).map { it.id }.toSet()
