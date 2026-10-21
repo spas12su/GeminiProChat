@@ -55,19 +55,16 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Use runner Android SDK
+      - name: Install current Android command-line tools and SDK
         run: |
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -path '*/bin/sdkmanager' | sort | tail -1)"
-          test -x "$SDKMANAGER"
-          echo "SDKMANAGER=$SDKMANAGER"
+          mkdir -p "$RUNNER_TEMP/android-cmdline"
+          wget -q -O "$RUNNER_TEMP/cmdline-tools.zip"             "https://dl.google.com/android/repository/commandlinetools-linux-13114758_latest.zip"
+          unzip -q "$RUNNER_TEMP/cmdline-tools.zip" -d "$RUNNER_TEMP/android-cmdline"
+          SDKMANAGER="$RUNNER_TEMP/android-cmdline/cmdline-tools/bin/sdkmanager"
+          chmod +x "$SDKMANAGER"
           "$SDKMANAGER" --version
-
-      - name: Install Android SDK requirements
-        run: |
-          SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -path '*/bin/sdkmanager' | sort | tail -1)"
-          yes | "$SDKMANAGER" --licenses >/dev/null || true
-          "$SDKMANAGER" "platforms;android-36" "platforms;android-37" "build-tools;36.0.0" "build-tools;37.0.0"
+          yes | "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --licenses >/dev/null || true
+          "$SDKMANAGER" --sdk_root="$ANDROID_HOME"             "platforms;android-36" "platforms;android-37"             "build-tools;36.0.0" "build-tools;37.0.0"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
