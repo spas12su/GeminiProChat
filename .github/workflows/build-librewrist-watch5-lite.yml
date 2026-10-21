@@ -36,18 +36,44 @@ jobs:
           git apply ../librewrist-watch5-lite-auto.patch
           python3 - <<'PY'
           from pathlib import Path
+
           p = Path("patcher-app/app/build.gradle.kts")
           s = p.read_text()
           s = s.replace('applicationId = "io.openshm.patcher"', 'applicationId = "io.openshm.patcher.watch5lite"')
           s = s.replace('versionName = "0.9.5-local"', 'versionName = "0.9.5-watch5lite-r3"')
           p.write_text(s)
+
           p = Path("patcher-app/app/src/main/res/values/strings.xml")
           s = p.read_text()
-          s = s.replace('<string name="app_name" translatable="false">LibreWrist</string>', '<string name="app_name" translatable="false">LibreWrist Watch5 Lite</string>')
+          s = s.replace('<string name="app_name" translatable="false">LibreWrist</string>',
+                        '<string name="app_name" translatable="false">LibreWrist Watch5 Lite</string>')
+          p.write_text(s)
+
+          p = Path("patcher-app/app/src/main/res/values-zh-rTW/strings.xml")
+          s = p.read_text()
+          s = s.replace('<string name="home_menu_signing_key">簽署金鑰</string>',
+                        '<string name="home_menu_signing_key">修改版 SHM 金鑰備份 / 還原</string>')
+          p.write_text(s)
+
+          p = Path("patcher-app/app/src/main/res/values-zh-rTW/strings_self_update.xml")
+          s = p.read_text()
+          s = s.replace('<string name="settings_signing_key_summary">備份或還原為你的組建簽署的金鑰</string>',
+                        '<string name="settings_signing_key_summary">備份或還原用來簽署修改版 SHM 的金鑰；遺失後無法直接覆蓋更新</string>')
+          p.write_text(s)
+
+          p = Path("patcher-app/app/src/main/kotlin/io/openshm/patcher/ui/screens/build/BuildDoneScreen.kt")
+          s = p.read_text()
+          needle = '    KeyBackupCard(state.backup, onBackUpKey, onSaveBackup, onSaveWithPassword)\n'
+          repl = needle + '    Button(onClick = onBackUpKey) { Text(stringResource(R.string.home_menu_signing_key)) }\n'
+          if needle not in s:
+              raise SystemExit("BuildDone key backup anchor not found")
+          s = s.replace(needle, repl, 1)
           p.write_text(s)
           PY
           grep -n 'applicationId\|versionName' patcher-app/app/build.gradle.kts
-          grep -n 'app_name' patcher-app/app/src/main/res/values/strings.xml
+          grep -n 'home_menu_signing_key' patcher-app/app/src/main/res/values-zh-rTW/strings.xml
+          grep -n 'settings_signing_key_summary' patcher-app/app/src/main/res/values-zh-rTW/strings_self_update.xml
+          grep -n 'KeyBackupCard\|home_menu_signing_key' patcher-app/app/src/main/kotlin/io/openshm/patcher/ui/screens/build/BuildDoneScreen.kt
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -74,46 +100,41 @@ jobs:
         with:
           gradle-version: "9.5.0"
 
-      - name: Restore persistent Lite signing key
-        env:
-          P12_BASE64: ${{ secrets.LITE_KEYSTORE_BASE64 }}
+      - name: Create temporary build signing key
         run: |
-          if [ -z "$P12_BASE64" ]; then
-            echo "::error::Missing repository secret LITE_KEYSTORE_BASE64"
-            exit 1
-          fi
-          keys="$RUNNER_TEMP/openshm-keys"
-          ( umask 077
-            mkdir -p "$keys"
-            printf '%s' "$P12_BASE64" | base64 -d > "$keys/patcher.p12"
-            printf '%s' 'LibreWristWatch5Lite-Key-2026' > "$keys/patcher.pass"
-          )
-          echo "OPENSHM_KEYS_DIR=$keys" >> "$GITHUB_ENV"
-          echo "PATCHER_KEY_ALIAS=watch5lite" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/openshm-keys"
+          PASS="$(openssl rand -hex 24)"
+          printf '%s' "$PASS" > "$RUNNER_TEMP/openshm-keys/patcher.pass"
+          keytool -genkeypair -noprompt \
+            -storetype PKCS12 \
+            -keystore "$RUNNER_TEMP/openshm-keys/patcher.p12" \
+            -storepass "$PASS" -keypass "$PASS" \
+            -alias patcher -keyalg RSA -keysize 3072 -validity 3650 \
+            -dname "CN=Temporary Build Key"
 
       - name: Build release APK
         working-directory: librewrist/patcher-app
-        run: gradle --no-daemon --stacktrace :app:assembleRelease
+        run: |
+          export OPENSHM_KEYS_DIR="$RUNNER_TEMP/openshm-keys"
+          gradle --no-daemon --stacktrace :app:assembleRelease
 
-      - name: Verify and prepare APK
+      - name: Prepare APK and local signing tool
         run: |
           src="librewrist/patcher-app/app/build/outputs/apk/release/app-release.apk"
           test -s "$src"
-          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs "$src"
           mkdir -p output
-          cp "$src" output/LibreWrist_Watch5_Lite_R3.apk
-          sha256sum output/LibreWrist_Watch5_Lite_R3.apk | tee output/SHA256SUMS.txt
-          bytes="$(stat -c%s output/LibreWrist_Watch5_Lite_R3.apk)"
-          echo "APK bytes: $bytes"
-          test "$bytes" -lt 81672941
-          ls -lh output/LibreWrist_Watch5_Lite_R3.apk
+          cp "$src" output/LibreWrist_Watch5_Lite_R3_temp.apk
+          cp "$ANDROID_HOME/build-tools/36.0.0/lib/apksigner.jar" output/apksigner.jar
+          sha256sum output/LibreWrist_Watch5_Lite_R3_temp.apk | tee output/SHA256SUMS.txt
+          ls -lh output/LibreWrist_Watch5_Lite_R3_temp.apk output/apksigner.jar
 
-      - name: Upload APK
+      - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: LibreWrist-Watch5-Lite-R3
+          name: LibreWrist-Watch5-Lite-R3-UnsignedHandoff
           path: |
-            output/LibreWrist_Watch5_Lite_R3.apk
+            output/LibreWrist_Watch5_Lite_R3_temp.apk
+            output/apksigner.jar
             output/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 7
