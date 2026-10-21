@@ -62,7 +62,7 @@ jobs:
           unzip -q "$RUNNER_TEMP/cmdline-tools.zip" -d "$RUNNER_TEMP/android-cmdline"
           SDKMANAGER="$RUNNER_TEMP/android-cmdline/cmdline-tools/bin/sdkmanager"
           chmod +x "$SDKMANAGER"
-          "$SDKMANAGER" --version
+          "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --version
           yes | "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --licenses >/dev/null || true
           "$SDKMANAGER" --sdk_root="$ANDROID_HOME"             "platforms;android-36" "platforms;android-37"             "build-tools;36.0.0" "build-tools;37.0.0"
 
