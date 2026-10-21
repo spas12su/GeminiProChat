@@ -58,51 +58,62 @@ jobs:
       - name: Install current Android command-line tools and SDK
         run: |
           mkdir -p "$RUNNER_TEMP/android-cmdline"
-          wget -q -O "$RUNNER_TEMP/cmdline-tools.zip"             "https://dl.google.com/android/repository/commandlinetools-linux-13114758_latest.zip"
+          wget -q -O "$RUNNER_TEMP/cmdline-tools.zip" \
+            "https://dl.google.com/android/repository/commandlinetools-linux-13114758_latest.zip"
           unzip -q "$RUNNER_TEMP/cmdline-tools.zip" -d "$RUNNER_TEMP/android-cmdline"
           SDKMANAGER="$RUNNER_TEMP/android-cmdline/cmdline-tools/bin/sdkmanager"
           chmod +x "$SDKMANAGER"
           "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --version
           yes | "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --licenses >/dev/null || true
-          "$SDKMANAGER" --sdk_root="$ANDROID_HOME"             "platforms;android-36" "platforms;android-37.0"             "build-tools;36.0.0" "build-tools;37.0.0"
+          "$SDKMANAGER" --sdk_root="$ANDROID_HOME" \
+            "platforms;android-36" "platforms;android-37.0" \
+            "build-tools;36.0.0" "build-tools;37.0.0"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "9.5.0"
 
-      - name: Create one-run signing key
+      - name: Restore persistent Lite signing key
+        env:
+          P12_BASE64: ${{ secrets.LITE_KEYSTORE_BASE64 }}
         run: |
-          mkdir -p "$RUNNER_TEMP/openshm-keys"
-          PASS="$(openssl rand -hex 24)"
-          printf '%s' "$PASS" > "$RUNNER_TEMP/openshm-keys/patcher.pass"
-          keytool -genkeypair -noprompt             -storetype PKCS12             -keystore "$RUNNER_TEMP/openshm-keys/patcher.p12"             -storepass "$PASS" -keypass "$PASS"             -alias patcher -keyalg RSA -keysize 3072 -validity 3650             -dname "CN=LibreWrist Watch5 Lite, O=Personal Build"
+          if [ -z "$P12_BASE64" ]; then
+            echo "::error::Missing repository secret LITE_KEYSTORE_BASE64"
+            exit 1
+          fi
+          keys="$RUNNER_TEMP/openshm-keys"
+          ( umask 077
+            mkdir -p "$keys"
+            printf '%s' "$P12_BASE64" | base64 -d > "$keys/patcher.p12"
+            printf '%s' 'LibreWristWatch5Lite-Key-2026' > "$keys/patcher.pass"
+          )
+          echo "OPENSHM_KEYS_DIR=$keys" >> "$GITHUB_ENV"
+          echo "PATCHER_KEY_ALIAS=watch5lite" >> "$GITHUB_ENV"
 
       - name: Build release APK
         working-directory: librewrist/patcher-app
-        run: |
-          export OPENSHM_KEYS_DIR="$RUNNER_TEMP/openshm-keys"
-          gradle --no-daemon --stacktrace :app:assembleRelease
+        run: gradle --no-daemon --stacktrace :app:assembleRelease
 
       - name: Verify and prepare APK
         run: |
           src="librewrist/patcher-app/app/build/outputs/apk/release/app-release.apk"
           test -s "$src"
-          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose "$src"
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs "$src"
           mkdir -p output
           cp "$src" output/LibreWrist_Watch5_Lite_R3.apk
-          sha256sum output/LibreWrist_Watch5_Lite_Release.apk | tee output/SHA256SUMS.txt
-          bytes="$(stat -c%s output/LibreWrist_Watch5_Lite_Release.apk)"
+          sha256sum output/LibreWrist_Watch5_Lite_R3.apk | tee output/SHA256SUMS.txt
+          bytes="$(stat -c%s output/LibreWrist_Watch5_Lite_R3.apk)"
           echo "APK bytes: $bytes"
           test "$bytes" -lt 81672941
-          ls -lh output/LibreWrist_Watch5_Lite_Release.apk
+          ls -lh output/LibreWrist_Watch5_Lite_R3.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: LibreWrist-Watch5-Lite-Release
+          name: LibreWrist-Watch5-Lite-R3
           path: |
-            output/LibreWrist_Watch5_Lite_Release.apk
+            output/LibreWrist_Watch5_Lite_R3.apk
             output/SHA256SUMS.txt
           if-no-files-found: error
           retention-days: 7
