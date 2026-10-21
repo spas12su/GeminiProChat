@@ -64,7 +64,7 @@ jobs:
           chmod +x "$SDKMANAGER"
           "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --version
           yes | "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --licenses >/dev/null || true
-          "$SDKMANAGER" --sdk_root="$ANDROID_HOME"             "platforms;android-36" "platforms;android-37"             "build-tools;36.0.0" "build-tools;37.0.0"
+          "$SDKMANAGER" --sdk_root="$ANDROID_HOME"             "platforms;android-36" "platforms;android-37.0"             "build-tools;36.0.0" "build-tools;37.0.0"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
