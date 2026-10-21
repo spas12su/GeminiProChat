@@ -1,0 +1,172 @@
+--- a/USER_CUSTOM_NOTES_zh_TW.md
++++ b/USER_CUSTOM_NOTES_zh_TW.md
+@@ -9,6 +9,8 @@
+ - 仍保留手機與手錶 Samsung Health Monitor 及其感測器、藍牙與健康服務所需的權限和 Android 必須的確認畫面。
+ - 無人值守手機端連線新增「手動輸入配對埠 + 6 位數配對碼」模式，並可額外填入 Android「無線偵錯」頁面顯示的連線埠；用於 mDNS 服務搜尋失敗時。
+ - 不會刪除手錶原廠 SHM，也不會重設手錶。
++- APKMirror 來源會自動依目前已驗證 catalogue 的版本、ABI 與 nodpi 條件選擇 SHM APK，等待 APKMirror 倒數後自動接手下載；若網站改版導致自動選擇失敗，仍保留人工瀏覽備援。
++- 啟用 LibreWrist 官方簽章 catalogue 更新來源；原廠 SHM 版本、SHA-256 或 APKMirror release 改變時，不把版本寫死在精簡版程式內。
+ 
+ ## 操作手機無線偵錯的備援
+ 
+@@ -16,7 +18,9 @@
+ 
+ ## 尚未完成的部分
+ 
+-**不能保證所有官方 APK 都會自動下載。** 目前官方輸入檔在 catalogue 中只有 APKMirror 發行頁面與 SHA-256，未提供穩定、已授權的直接 APK 連結。APKMirror 通常要求網頁點選並可能產生動態連結，因此不能假裝目前已實現全自動下載。原本的內建瀏覽器下載擷取與雜湊驗證保留。若將來得到正式可直連的 HTTPS 來源，可以加入「驗證檔案版本與 SHA-256 後匯入」的自動取得功能。
++**APKMirror 自動取得屬於網頁流程自動化，不是固定直鏈。** App 會以簽章 catalogue 指定的精確 release 開頁，從頁面挑出符合版本、APK、nodpi 與 ABI 的項目，等候網站倒數後接續下載，最後仍以 catalogue SHA-256 為唯一驗證依據。網站若改版或阻擋自動流程，才退回原本人工瀏覽，不會猜版本或接受雜湊不符的檔案。
++
++**版本更新分兩層。** 只要 LibreWrist 官方發佈的是新的簽章 catalogue（例如 SHM 原廠版本、SHA-256、APKMirror release 或 patch pattern 改變，而且 `minAppVersion` 仍相容），本精簡版可直接採用，不需要重新安裝 APK。若新 catalogue 提高 `minAppVersion`，代表 patcher 程式本身也必須更新；此時精簡版應重新基於新版 LibreWrist 編譯，而不是強行套用不相容 catalogue。
+ 
+ **尚未進行實機測試，亦尚未完成 Android APK 編譯。** 此環境缺乏 Android SDK 和 Gradle distribution，無法確認在特定手機韌體上配對成功。請先用 Gradle 及 Android SDK 編譯測試，不要將原始碼 ZIP 當成 APK 安裝。
+ 
+--- a/patcher-app/app/src/main/kotlin/io/openshm/patcher/ui/screens/acquire/ApkMirrorWebView.kt
++++ b/patcher-app/app/src/main/kotlin/io/openshm/patcher/ui/screens/acquire/ApkMirrorWebView.kt
+@@ -27,6 +27,8 @@
+ import androidx.lifecycle.Lifecycle
+ import androidx.lifecycle.LifecycleEventObserver
+ import io.openshm.patcher.data.DownloadRequest
++import io.openshm.patcher.data.ApkMirrorGuide
++import io.openshm.patcher.data.InputApp
+ import io.openshm.patcher.data.NavDecision
+ import io.openshm.patcher.data.RedirectChain
+ import io.openshm.patcher.data.SiteGuide
+@@ -58,6 +60,7 @@
+     onPage: (String) -> Unit,
+     onBlocked: (String) -> Unit,
+     onDownload: (DownloadRequest) -> Unit,
++    autoInput: InputApp? = null,
+     modifier: Modifier = Modifier,
+ ) {
+     val page by rememberUpdatedState(onPage)
+@@ -88,6 +91,9 @@
+                 layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+                 configure(this)
+                 webViewClient = object : WebViewClient() {
++                    private var autoReleaseUrl: String? = null
++                    private var autoVariantUrl: String? = null
++                    private var autoFinalUrl: String? = null
+                     override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                         if (!request.isForMainFrame) return false
+                         val url = request.url.toString()
+@@ -122,6 +128,30 @@
+                         page(url)
+                     }
+ 
++                    override fun onPageFinished(view: WebView, url: String) {
++                        super.onPageFinished(view, url)
++                        val input = autoInput ?: return
++                        if (guide !== ApkMirrorGuide || !ApkMirrorGuide.isAllowedNavigation(url)) return
++                        val step = ApkMirrorGuide.coachStep(url, input)
++                        when {
++                            step.step == 2 && !step.wrongVersion && autoReleaseUrl != url -> {
++                                autoReleaseUrl = url
++                                view.postDelayed({ if (view.url == url) autoPickMirrorVariant(view, input) }, 600)
++                            }
++                            step.step >= 3 && !url.contains("/download/") && autoVariantUrl != url -> {
++                                autoVariantUrl = url
++                                // APKMirror deliberately delays the final button for non-Premium visitors.
++                                view.postDelayed({ if (view.url == url) autoClickMirrorDownload(view) }, 16_500)
++                                view.postDelayed({ if (view.url == url) autoClickMirrorDownload(view) }, 22_000)
++                            }
++                            url.contains("/download/") && autoFinalUrl != url -> {
++                                autoFinalUrl = url
++                                view.postDelayed({ if (view.url == url) autoClickMirrorFinalFile(view) }, 800)
++                                view.postDelayed({ if (view.url == url) autoClickMirrorFinalFile(view) }, 2_500)
++                            }
++                        }
++                    }
++
+                     override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: SslError) = handler.cancel()
+                 }
+                 webChromeClient = object : WebChromeClient() {
+@@ -151,6 +181,79 @@
+     )
+ }
+ 
++/** Selects the catalogue-requested APK variant from an exact APKMirror release page. */
++private fun autoPickMirrorVariant(view: WebView, input: InputApp) {
++    val wantedVersion = jsQuote(input.versionName.lowercase())
++    val wantedAbis = input.abis.joinToString(prefix = "[", postfix = "]") { jsQuote(it.lowercase()) }
++    val script = """
++        (() => {
++          const version = $wantedVersion;
++          const abis = $wantedAbis;
++          const candidates = [...document.querySelectorAll('a[href]')].filter(a => {
++            const h = (a.href || '').toLowerCase();
++            return h.includes('-android-apk-download/') && h.includes(version.replaceAll('.', '-'));
++          });
++          let best = null, bestScore = -1;
++          for (const a of candidates) {
++            let n = a, text = '';
++            for (let i = 0; i < 6 && n; i++, n = n.parentElement) text += ' ' + (n.innerText || '');
++            text = text.toLowerCase();
++            let score = text.includes(' apk') ? 3 : 0;
++            if (text.includes('nodpi')) score += 4;
++            for (const abi of abis) if (text.includes(abi)) score += 2;
++            if (score > bestScore) { best = a; bestScore = score; }
++          }
++          if (best) { best.click(); return 'clicked'; }
++          return 'none';
++        })();
++    """.trimIndent()
++    view.evaluateJavascript(script, null)
++}
++
++/** Waits out APKMirror's countdown, then follows its per-request /download/?key= link. */
++private fun autoClickMirrorDownload(view: WebView) {
++    val script = """
++        (() => {
++          const links = [...document.querySelectorAll('a[href]')];
++          const a = links.find(x => (x.href || '').includes('/download/?key=')) ||
++                    links.find(x => /download\s+apk/i.test((x.innerText || '').trim()));
++          if (a) { a.click(); return 'clicked'; }
++          return 'none';
++        })();
++    """.trimIndent()
++    view.evaluateJavascript(script, null)
++}
++
++/** On APKMirror's last hand-off page, clicks the real file link if the page did not auto-start it. */
++private fun autoClickMirrorFinalFile(view: WebView) {
++    val script = """
++        (() => {
++          const links = [...document.querySelectorAll('a[href]')];
++          const a = links.find(x => /\.apk([?#].*)?$/i.test(x.href || '')) ||
++                    links.find(x => /click\s+here|download\s+apk/i.test((x.innerText || '').trim()));
++          if (a) { a.click(); return 'clicked'; }
++          return 'none';
++        })();
++    """.trimIndent()
++    view.evaluateJavascript(script, null)
++}
++
++/** JSON/JavaScript string literal without exposing a JavaScript bridge to the page. */
++private fun jsQuote(value: String): String = buildString {
++    append('"')
++    value.forEach { c ->
++        when (c) {
++            '\\' -> append("\\\\")
++            '"' -> append("\\\"")
++            '\n' -> append("\\n")
++            '\r' -> append("\\r")
++            '\t' -> append("\\t")
++            else -> if (c.code < 0x20) append("\\u%04x".format(c.code)) else append(c)
++        }
++    }
++    append('"')
++}
++
+ // The source pages cannot render without JavaScript; the page is limited to the source's hosts by the
+ // navigation check, and nothing is exposed to it (no JavaScript interface, no file or content access).
+ @SuppressLint("SetJavaScriptEnabled")
+--- a/patcher-app/app/src/main/kotlin/io/openshm/patcher/ui/screens/acquire/GuidedBrowserHost.kt
++++ b/patcher-app/app/src/main/kotlin/io/openshm/patcher/ui/screens/acquire/GuidedBrowserHost.kt
+@@ -102,6 +102,7 @@
+                     if (guide.isAllowedNavigation(url)) currentUrl = url
+                 },
+                 onBlocked = { notice = Notice.Blocked(it) },
++                autoInput = input.takeIf { isMirror && it.onApkMirror },
+                 onDownload = { request ->
+                     // The request carries the normalized URL (e.g. https for an http CDN link).
+                     when (guide.isAcceptableDownload(request.url, request.contentDisposition, request.mimeType)) {
