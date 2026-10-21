@@ -170,3 +170,53 @@
                  onDownload = { request ->
                      // The request carries the normalized URL (e.g. https for an http CDN link).
                      when (guide.isAcceptableDownload(request.url, request.contentDisposition, request.mimeType)) {
+
+--- a/patcher-app/app/src/main/kotlin/io/openshm/patcher/ui/nav/PatcherNavHost.kt
++++ b/patcher-app/app/src/main/kotlin/io/openshm/patcher/ui/nav/PatcherNavHost.kt
+@@ -118,6 +118,7 @@
+ import io.openshm.patcher.ui.screens.signingkey.SigningKeyViewModel
+ import io.openshm.patcher.ui.screens.acquire.AcquireEvent
++import io.openshm.patcher.ui.screens.acquire.AcquireProgress
+ import io.openshm.patcher.ui.screens.acquire.AcquireScreen
+ import io.openshm.patcher.ui.screens.acquire.AcquireViewModel
+ import io.openshm.patcher.ui.screens.acquire.GuidedBrowserHost
+@@ -333,9 +334,21 @@
+             composable(Route.Acquire.path) {
+                 val vm: AcquireViewModel = viewModel()
+                 val state by vm.state.collectAsStateWithLifecycle()
++                var autoAcquireAttempted by rememberSaveable { mutableStateOf(emptyList<String>()) }
+                 val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument(), vm::onFilePicked)
+                 LaunchedEffect(vm) {
+                     vm.pickRequests.collect { picker.launch(arrayOf(APK_MIME, "application/octet-stream")) }
+                 }
++                // Lite mode starts acquisition itself.  The WebView then selects the catalogue's exact
++                // APKMirror variant and hands the real file to InputStore for SHA-256 verification.
++                // Attempt each input only once automatically, so a site change or rejected hash falls
++                // back to the visible manual controls instead of looping forever.
++                LaunchedEffect(state.cards) {
++                    val card = state.cards.firstOrNull {
++                        it.progress is AcquireProgress.Missing &&
++                            it.input.onApkMirror && it.input.id !in autoAcquireAttempted
++                    }
++                    if (card != null) {
++                        autoAcquireAttempted = autoAcquireAttempted + card.input.id
++                        navController.navigate(Route.guidedBrowser(card.input.id, InputSource.ApkMirror))
++                    }
++                }
+                 AcquireScreen(
+                     state,
+                     onEvent = { event ->
+--- a/patcher-app/app/own-code.gradle.kts
++++ b/patcher-app/app/own-code.gradle.kts
+@@ -188,7 +188,10 @@
+ val ownCodeAssets = tasks.register<AssembleOwnCodeAssets>("ownCodeAssets") {
+     group = "build"
+     description = "Builds the placeholder-form own-code assets and copies the signed catalogue."
+-    dependsOn(watchMod, alarmFork, keepAwake, bridgeWatch, bridgePhone)
++    // Watch5 Lite permanently skips Alarm and both bridge apps, so do not carry their binaries
++    // inside the patcher APK.  Keep only the SHM watch injection and install helper.
++    // The tasks remain defined above for source compatibility but are never built or packaged here.
++    dependsOn(watchMod, keepAwake)
+     built.set(stagingDir)
+     catalogue.from(
+         repoRoot.resolve("catalogue/catalogue.json"), repoRoot.resolve("catalogue/catalogue.json.sig"),
